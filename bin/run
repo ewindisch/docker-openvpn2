@@ -2,24 +2,18 @@
 
 set -e
 
-[ -d /dev/net ] ||
-  mkdir -p /dev/net
-[[ -c /dev/net/tun ]] ||
-  mknod /dev/net/tun c 10 200
+function gen_config {
+	[ -f dh.pem ] ||
+	  openssl dhparam -out dh.pem 2048
+	[ -f key.pem ] ||
+	  openssl genrsa -out key.pem 2048
+	[ -f csr.pem ] ||
+	  openssl req -new -key key.pem -out csr.pem -subj /CN=OpenVPN/
+	[ -f cert.pem ] ||
+	  openssl x509 -req -in csr.pem -out cert.pem -signkey key.pem -days 36525
 
-cd /etc/openvpn
-
-[ -f dh.pem ] ||
-  openssl dhparam -out dh.pem 512
-[ -f key.pem ] ||
-  openssl genrsa -out key.pem 2048
-[ -f csr.pem ] ||
-  openssl req -new -key key.pem -out csr.pem -subj /CN=OpenVPN/
-[ -f cert.pem ] ||
-  openssl x509 -req -in csr.pem -out cert.pem -signkey key.pem -days 36525
-
-[ -f tcp443.conf ] || cat >tcp443.conf <<EOF
-server 5.5.0.0 255.255.0.0
+	[ -f tcp443.conf ] || cat >tcp443.conf <<EOF
+server 10.254.0.0 255.255.255.0
 verb 3
 duplicate-cn
 key /etc/openvpn/key.pem
@@ -34,10 +28,12 @@ proto tcp-server
 port 443
 dev tun443
 status openvpn-status-443.log
+
+tls-version-min 1.2
 EOF
 
 [ -f udp1194.conf ] || cat >udp1194.conf <<EOF
-server 5.5.0.0 255.255.0.0
+server 10.254.0.0 255.255.255.0
 verb 3 duplicate-cn
 key /etc/openvpn/key.pem
 ca /etc/openvpn/cert.pem
@@ -51,16 +47,20 @@ proto udp
 port 1194
 dev tun1194
 status openvpn-status-1194.log
-EOF
 
-MY_IP_ADDR=$(curl -s http://myip.enix.org/REMOTE_ADDR)
-[ "$MY_IP_ADDR" ] || {
-    echo "Sorry, I could not figure out my public IP address."
-    echo "(I use http://myip.enix.org/REMOTE_ADDR/ for that purpose.)"
-    exit 1
+tls-version-min 1.2
+EOF
 }
 
-[ -f client.ovpn ] || cat >client.ovpn <<EOF
+function gen_clientcfg {
+	MY_IP_ADDR=$(curl -s http://myip.enix.org/REMOTE_ADDR)
+	[ "$MY_IP_ADDR" ] || {
+		echo "Sorry, I could not figure out my public IP address."
+		echo "(I use http://myip.enix.org/REMOTE_ADDR/ for that purpose.)"
+		exit 1
+	}
+
+	cat <<EOF
 client
 nobind
 dev tun
@@ -75,9 +75,6 @@ redirect-gateway def1
 <ca>
 `cat cert.pem`
 </ca>
-<dh>
-`cat dh.pem`
-</dh>
 
 <connection>
 remote $MY_IP_ADDR 1194 udp
@@ -87,18 +84,33 @@ remote $MY_IP_ADDR 1194 udp
 remote $MY_IP_ADDR 443 tcp-client
 </connection>
 EOF
+}
 
-iptables -t nat -A POSTROUTING -s  5.5.0.0/16 -o eth0 -j MASQUERADE
+function do_init {
+	[ -d /dev/net ] ||
+	  mkdir -p /dev/net
+	[[ -c /dev/net/tun ]] ||
+	  mknod /dev/net/tun c 10 200
+
+	cd /etc/openvpn
+
+	iptables -t nat -A POSTROUTING -s  10.254.0.0/24 -o eth0 -j MASQUERADE
+	haveged &
+}
 
 case $1 in
   --udp)
+	 do_init
+	 gen_config
      exec openvpn udp1194.conf
     ;;
   --tcp)
+	 do_init
+     gen_config
      exec openvpn tcp443.conf
     ;;
   --config)
-    cat client.ovpn
+    gen_clientcfg
     ;;
   *)
     echo "No option specified, using UDP config"
