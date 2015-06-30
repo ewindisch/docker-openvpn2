@@ -4,52 +4,52 @@ set -e
 
 function gen_config {
 	[ -f dh.pem ] ||
-	  openssl dhparam -out dh.pem 2048
+		openssl dhparam -out dh.pem 2048
 	[ -f key.pem ] ||
-	  openssl genrsa -out key.pem 2048
+		openssl genrsa -out key.pem 2048
 	[ -f csr.pem ] ||
-	  openssl req -new -key key.pem -out csr.pem -subj /CN=OpenVPN/
+		openssl req -new -key key.pem -out csr.pem -subj /CN=OpenVPN/
 	[ -f cert.pem ] ||
-	  openssl x509 -req -in csr.pem -out cert.pem -signkey key.pem -days 36525
+		openssl x509 -req -in csr.pem -out cert.pem -signkey key.pem -days 36525
 
-	[ -f tcp443.conf ] || cat >tcp443.conf <<EOF
-server 10.254.0.0 255.255.255.0
-verb 3
-duplicate-cn
-key /etc/openvpn/key.pem
-ca /etc/openvpn/cert.pem
-cert /etc/openvpn/cert.pem
-dh /etc/openvpn/dh.pem
-keepalive 10 60
-persist-key
-persist-tun
+	[ -f tcp443.conf ] || cat >tcp443.conf <<-EOF
+		server 10.254.0.0 255.255.255.0
+		verb 3
+		duplicate-cn
+		key /etc/openvpn/key.pem
+		ca /etc/openvpn/cert.pem
+		cert /etc/openvpn/cert.pem
+		dh /etc/openvpn/dh.pem
+		keepalive 10 60
+		persist-key
+		persist-tun
 
-proto tcp-server
-port 443
-dev tun443
-status openvpn-status-443.log
+		proto tcp-server
+		port 443
+		dev tun443
+		status openvpn-status-443.log
 
-tls-version-min 1.2
-EOF
+		tls-version-min 1.2
+	EOF
 
-[ -f udp1194.conf ] || cat >udp1194.conf <<EOF
-server 10.254.0.0 255.255.255.0
-verb 3 duplicate-cn
-key /etc/openvpn/key.pem
-ca /etc/openvpn/cert.pem
-cert /etc/openvpn/cert.pem
-dh /etc/openvpn/dh.pem
-keepalive 10 60
-persist-key
-persist-tun
+	[ -f udp1194.conf ] || cat >udp1194.conf <<-EOF
+		server 10.254.0.0 255.255.255.0
+		verb 3 duplicate-cn
+		key /etc/openvpn/key.pem
+		ca /etc/openvpn/cert.pem
+		cert /etc/openvpn/cert.pem
+		dh /etc/openvpn/dh.pem
+		keepalive 10 60
+		persist-key
+		persist-tun
 
-proto udp
-port 1194
-dev tun1194
-status openvpn-status-1194.log
+		proto udp
+		port 1194
+		dev tun1194
+		status openvpn-status-1194.log
 
-tls-version-min 1.2
-EOF
+		tls-version-min 1.2
+	EOF
 }
 
 function gen_clientcfg {
@@ -60,60 +60,62 @@ function gen_clientcfg {
 		exit 1
 	}
 
-	cat <<EOF
-client
-nobind
-dev tun
-redirect-gateway def1
+	cat <<-EOF
+		client
+		nobind
+		dev tun
+		redirect-gateway def1
 
-<key>
-`cat key.pem`
-</key>
-<cert>
-`cat cert.pem`
-</cert>
-<ca>
-`cat cert.pem`
-</ca>
+		<key>
+		`cat key.pem`
+		</key>
+		<cert>
+		`cat cert.pem`
+		</cert>
+		<ca>
+		`cat cert.pem`
+		</ca>
 
-<connection>
-remote $MY_IP_ADDR 1194 udp
-</connection>
+		<connection>
+		remote $MY_IP_ADDR 1194 udp
+		</connection>
 
-<connection>
-remote $MY_IP_ADDR 443 tcp-client
-</connection>
-EOF
+		<connection>
+		remote $MY_IP_ADDR 443 tcp-client
+		</connection>
+	EOF
 }
 
 function do_init {
 	[ -d /dev/net ] ||
-	  mkdir -p /dev/net
+		mkdir -p /dev/net
 	[[ -c /dev/net/tun ]] ||
-	  mknod /dev/net/tun c 10 200
+		mknod /dev/net/tun c 10 200
 
 	cd /etc/openvpn
 
 	iptables -t nat -A POSTROUTING -s  10.254.0.0/24 -o eth0 -j MASQUERADE
+
+	# Feeds the random number generator, otherwise key generation may be too slow
 	haveged &
 }
 
 case $1 in
-  --udp)
-	 do_init
-	 gen_config
-     exec openvpn udp1194.conf
-    ;;
-  --tcp)
-	 do_init
-     gen_config
-     exec openvpn tcp443.conf
-    ;;
-  --config)
-    gen_clientcfg
-    ;;
-  *)
-    echo "No option specified, using UDP config"
-    exec openvpn udp1194.conf
-    ;;
+	--udp)
+		do_init
+		gen_config
+		exec openvpn udp1194.conf
+		;;
+	--tcp)
+		do_init
+		gen_config
+		exec openvpn tcp443.conf
+		;;
+	--config)
+		gen_clientcfg
+		;;
+	*)
+		echo "No option specified, using UDP config"
+		exec openvpn udp1194.conf
+		;;
 esac
